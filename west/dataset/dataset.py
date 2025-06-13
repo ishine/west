@@ -21,19 +21,12 @@ class DataArguments:
     data_path: str = field(default=None,
                            metadata={"help": "Path to the training data."})
     batch_size: int = field(default=1, metadata={"help": "batch size"})
-    max_dynamic_size: int = field(
-        default=0,
-        metadata={
-            "help":
-            "max units for dynmamic batch size, it will override any"
-            "value given in batch_size"
-        })
     pack_size: int = field(
         default=0,
         metadata={
             "help":
             "size for sequence pack, it will override any value"
-            "given in batch_size and max_dynamic_size"
+            "given in batch_size"
         })
     max_speech_frames: int = 1000
     order: str = field(
@@ -57,9 +50,6 @@ class SpeechDataset(IterableDataset):
         if data_args.pack_size > 0:
             self.mode = 'pack'
             self.pack_size = data_args.pack_size
-        elif data_args.max_dynamic_size > 0:
-            self.mode = 'dynamic'
-            self.max_dynamic_size = data_args.max_dynamic_size
         else:
             self.mode = 'static'
             self.batch_size = data_args.batch_size
@@ -237,11 +227,6 @@ class SpeechDataset(IterableDataset):
                 yield self._batch(buffer)
                 buffer = []
                 total_length = 0
-            elif self.mode == 'dynamic' and total_length + len(
-                    data['input_ids']) > self.max_dynamic_size:
-                yield self._batch(buffer)
-                buffer = []
-                total_length = 0
             elif self.mode == 'pack' and total_length + len(
                     data['input_ids']) >= self.pack_size:
                 yield self._pack_sequence(buffer)
@@ -249,7 +234,7 @@ class SpeechDataset(IterableDataset):
                 total_length = 0
             buffer.append(data)
             total_length += len(data['input_ids'])
-        if self.mode in ['static', 'dynamic']:
+        if self.mode == 'static':
             yield self._batch(buffer)
         else:
             yield self._pack_sequence(buffer)
