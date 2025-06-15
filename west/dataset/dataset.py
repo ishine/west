@@ -13,6 +13,7 @@ import torch
 import torch.nn.functional as F
 import torchaudio
 import transformers
+import webdataset as wds
 import whisper
 
 
@@ -62,10 +63,18 @@ class SpeechDataset(IterableDataset):
         self.data_args = data_args
 
     def _read_one(self):
+        raw = self.data_path.endswith('.jsonl')
         with open(self.data_path, "r") as f:
             for i, line in enumerate(f):
                 if i % self.world_size == self.rank:
-                    yield json.loads(line)
+                    if raw:  # raw json data
+                        yield json.loads(line)
+                    else:  # shard(tar) list data
+                        src = [{'url': line.strip()}]
+                        data = wds.tarfile_samples(src)
+                        for x in data:
+                            x['txt'] = x['txt'].decode('utf8')
+                            yield x
 
     def _extract(self, item):
         IGNORE_TOKEN_ID = LabelSmoother.ignore_index
@@ -249,10 +258,9 @@ if __name__ == '__main__':
     tokenizer.bos_token = tokenizer.eos_token
     print(tokenizer.bos_token_id)
     data_args = DataArguments
-    data_args.data_path = 'data/aishell/train.jsonl'
+    data_args.data_path = 'data/train.jsonl'
     data_args.pack_size = 512
     dataset = SpeechDataset(tokenizer, data_args)
     for i, x in enumerate(dataset):
-        np.savetxt('tensor.txt', x['input_ids'].numpy(), fmt='%d')
-        # print(x)
+        print(x)
         if i > 0: break
