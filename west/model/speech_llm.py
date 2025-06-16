@@ -1,7 +1,6 @@
 # Copyright (c) 2025 Binbin Zhang(binbzha@qq.com)
 
 import logging
-import math
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -9,7 +8,6 @@ import safetensors
 import torch
 import transformers
 import wenet
-import whisper
 from torch import nn
 from transformers import AutoModelForCausalLM, PreTrainedModel
 
@@ -17,12 +15,7 @@ from transformers import AutoModelForCausalLM, PreTrainedModel
 @dataclass
 class ModelArguments:
     llm_model_name_or_path: Optional[str] = field(default="Qwen/Qwen2-7B")
-    whisper_model_name_or_path: Optional[str] = field(default="tiny")
     wenet_model_name_or_path: Optional[str] = field(default="")
-    encoder_type: str = field(
-        default="whisper",
-        metadata={"help": "encoder type, whisper or wenet"},
-    )
     encoder_ds_rate: int = 2
     encoder_projector_ds_rate: int = 5
     projector_hidden_size: int = 2048
@@ -31,27 +24,6 @@ class ModelArguments:
         default=8192,
         metadata={"help": "Maximum sequence length"},
     )
-    max_speech_seconds: int = 30
-    frames_per_second: int = 100
-    # For decode
-    decode_instruction: Optional[str] = field(default="")
-
-    @property
-    def ds_rate(self):
-        return self.encoder_ds_rate * self.encoder_projector_ds_rate
-
-    @property
-    def speech_tokens_per_second(self):
-        return self.frames_per_second / self.ds_rate
-
-    @property
-    def max_speech_token_size(self):
-        return math.ceil(self.max_speech_seconds *
-                         self.speech_tokens_per_second)
-
-    @property
-    def max_mel_size(self):
-        return self.max_speech_seconds * self.frames_per_second
 
 
 class ProjectorCov1d(nn.Module):
@@ -101,7 +73,7 @@ class SpeechLLM(PreTrainedModel):
         self.encoder = encoder
         self.projector = projector
         self._keys_to_ignore_on_save = set()
-        # Do not save the parameter of llm and whisper
+        # Do not save the parameter of llm and speech encoder
         for k in self.llm.state_dict().keys():
             self._keys_to_ignore_on_save.add('llm.' + k)
         for k in self.encoder.state_dict().keys():
@@ -177,8 +149,7 @@ class SpeechLLM(PreTrainedModel):
         inputs_embeds = text_emb
         for i in range(batch_size):
             s, e = audio_offsets[i], audio_offsets[i] + speech_emb_lens[i]
-            inputs_embeds[i, s:e, :] = speech_emb[
-                i, :speech_emb_lens[i], :]
+            inputs_embeds[i, s:e, :] = speech_emb[i, :speech_emb_lens[i], :]
         model_outputs = self.llm.generate(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
@@ -206,15 +177,9 @@ class SpeechLLM(PreTrainedModel):
 
 
 def init_model(model_args):
-    if model_args.encoder_type == "whisper":
-        encoder = whisper.load_model(model_args.whisper_model_name_or_path)
-    elif model_args.encoder_type == "wenet":
-        encoder = wenet.load_model_pt(model_args.wenet_model_name_or_path)
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        encoder = encoder.to(device)
-    else:
-        raise ValueError(f"Unexpected encoder type {model_args.encoder_type}")
-
+    encoder = wenet.load_model_pt(model_args.wenet_model_name_or_path)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    encoder = encoder.to(device)
     # Load llm model and tokenizer
     config = transformers.AutoConfig.from_pretrained(
         model_args.llm_model_name_or_path)
@@ -225,10 +190,7 @@ def init_model(model_args):
         torch_dtype='auto',
         attn_implementation="flash_attention_2",  # or "flex_attention"
     )
-    if model_args.encoder_type == "whisper":
-        encoder_dim = encoder.dims.n_audio_state
-    else:
-        encoder_dim = encoder.encoder.output_size()
+    encoder_dim = encoder.encoder.output_size()
     llm_dim = config.hidden_size
     projector = ProjectorCov1d(model_args, encoder_dim, llm_dim)
     total_params = sum(p.numel() for p in projector.parameters())
