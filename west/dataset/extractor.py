@@ -10,7 +10,6 @@ class Extractor(ABC):
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
-        print(self.kwargs)
 
     @abstractmethod
     def extract(self, item):
@@ -27,8 +26,6 @@ class ExtractorTtsCodec(Extractor):
         tokenizer = self.kwargs.get('tokenizer')
         inference = self.kwargs.get('inference', False)
         IGNORE_TOKEN_ID = LabelSmoother.ignore_index
-        print(type(item['wav']))
-        print(item['wav'])
         mel = s3tokenizer.log_mel_spectrogram(item['wav'])
         mel = mel.transpose(0, 1)
         # There is 100 frames mel per second, and 25 tokens per second
