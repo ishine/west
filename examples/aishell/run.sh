@@ -51,8 +51,8 @@ if [ $stage == "train" ] || [ $stage == "all" ]; then
         --encoder_projector_ds_rate 2 \
         --save_total_limit 10000 \
         --max_speech_seconds 10 \
-        --deepspeed conf/ds_config_zero3.json
-        # --dispatch_batches False
+        --deepspeed conf/ds_config_zero3.json \
+        --accelerator_config conf/accelerator_config.json
 fi
 
 
