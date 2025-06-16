@@ -95,43 +95,18 @@ class SpeechDataset(IterableDataset):
         tgt_audio = [IGNORE_TOKEN_ID] * len(ids_audio)
         instruction = 'Transcribe the speech'
         content = item['txt']
-        # chat = [{"role": "user", "content": instruction}]
-        # if self.inference:
-        #     kwargs = {'add_generation_prompt': True}
-        # else:
-        #     chat.append({"role": "assistant", "content": content})
-        #     kwargs = {'add_generation_prompt': False}
-        # ids_text = self.tokenizer.apply_chat_template(chat,
-        #                                               tokenize=True,
-        #                                               **kwargs)
-        # if ids_text[0] != self.tokenizer.bos_token_id:
-        #     ids_text = [self.tokenizer.bos_token_id] + ids_text
-        # if ids_text[-1] != self.tokenizer.eos_token_id and not self.inference:
-        #     ids_text = ids_text + [self.tokenizer.eos_token_id]
-        # ids = ids_audio + ids_text
-        # tgt = tgt_audio + ids_text
-        # ids0 = []
         # 0) audio first 1) instruction first
         if self.data_args.order == 'audio_first':
-            # t0 = ''
-            # t1 = '<|im_start|>system\n' + \
             t0 = '<|audio_bos|>'
             t1 = '<|audio_eos|><|im_start|>system\n' + \
                  'You are a helpful assistant<|im_end|>\n' + \
                   '<|im_start|>user\n' + \
                   instruction + '<|im_end|>\n' + \
                   '<|im_start|>assistant\n'
-            # t0 = '<|audio_bos|>'
-            # t1 = '<|audio_eos|>' \
-            #      '<|im_start|>user\n' + \
-            #      instruction + '<|im_end|>\n' + \
-            #      '<|im_start|>assistant\n'
         else:
             t0 = '<|im_start|>system\n' + \
                  'You are a helpful assistant<|im_end|>\n' + \
                  '<|im_start|>user\n' + instruction  + '<|audio_bos|>'
-            # t1 = '<|im_end|>\n' + '<|im_start|>assistant\n'
-            # t0 = '<|im_start|>user\n' + instruction + '<|audio_bos|>'
             t1 = '<|audio_eos|><|im_end|>\n' + '<|im_start|>assistant\n'
         ids0 = self.tokenizer.encode(t0)
         ids1 = self.tokenizer.encode(t1)
