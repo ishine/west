@@ -2,17 +2,16 @@
 
 import logging
 import math
-from typing import Optional
 from dataclasses import dataclass, field
+from typing import Optional
 
 import safetensors
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import transformers
-from transformers import AutoModelForCausalLM, PreTrainedModel
 import wenet
 import whisper
+from torch import nn
+from transformers import AutoModelForCausalLM, PreTrainedModel
 
 
 @dataclass

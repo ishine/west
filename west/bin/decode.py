@@ -2,15 +2,15 @@
 import sys
 from dataclasses import dataclass, field
 
-from tqdm import tqdm
 import torch
-from torch.utils.data import DataLoader
 import transformers
-from transformers import AutoTokenizer
 from accelerate import Accelerator
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+from transformers import AutoTokenizer
 
 from west.dataset.dataset import DataArguments, SpeechDataset
-from west.model.speech_llm import init_model, ModelArguments
+from west.model.speech_llm import ModelArguments, init_model
 
 
 @dataclass

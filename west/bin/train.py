@@ -3,20 +3,17 @@
 # https://github.com/QwenLM/Qwen2/blob/main/examples/sft/finetune.py
 
 import logging
-import os
 import pathlib
 from dataclasses import dataclass, field
-from typing import Union, Any
+from typing import Any, Union
 
-import numpy as np
 import torch
-import torch.nn as nn
 import transformers
-from transformers import AutoTokenizer, Trainer
-from transformers import TrainerCallback
+from torch import nn
+from transformers import AutoTokenizer, Trainer, TrainerCallback
 
 from west.dataset.dataset import DataArguments, SpeechDataset
-from west.model.speech_llm import init_model, ModelArguments
+from west.model.speech_llm import ModelArguments, init_model
 
 
 @dataclass
@@ -35,7 +32,7 @@ class MyTrainer(Trainer):
             self.optimizer.train()
         inputs = self._prepare_inputs(inputs)
         # loss compute will aplly `shift_labels`
-        # See https://github.com/huggingface/transformers/blob/v4.52.2/src/transformers/trainer.py#L3825
+        # See https://github.com/huggingface/transformers/blob/v4.52.2/src/transformers/trainer.py#L3825  # noqa
         with self.compute_loss_context_manager():
             loss, outputs = self.compute_loss(model,
                                               inputs,
@@ -48,7 +45,8 @@ class MyTrainer(Trainer):
             mask = labels != -100
             correct = (preds == labels) & mask
             accuracy = correct.sum().item() / mask.sum().item()
-            interval = self.args.logging_steps * self.args.gradient_accumulation_steps
+            interval = \
+                self.args.logging_steps * self.args.gradient_accumulation_steps
             if self.state.global_step % interval == 0:
                 self.log({
                     "train_loss": loss.detach().cpu().item(),
