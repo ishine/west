@@ -28,6 +28,9 @@ class DataArguments:
             "given in batch_size"
         })
     max_speech_frames: int = 1000
+    extractor_type: str = field(
+        default="asr_wenet",
+        metadata={"help": "extractor type, 'asr_wenet' or 'tts_codec'"})
 
 
 class SpeechDataset(IterableDataset):
@@ -56,7 +59,7 @@ class SpeechDataset(IterableDataset):
             self.world_size = 1
             self.rank = 0
         self.data_args = data_args
-        self.extractor = ExtractorFactory.create('asr_wenet')(
+        self.extractor = ExtractorFactory.create(data_args.extractor_type)(
             tokenizer=tokenizer,
             inference=inference,
         )
@@ -181,7 +184,7 @@ if __name__ == '__main__':
     print(tokenizer.bos_token_id)
     data_args = DataArguments
     data_args.data_path = 'data/train.jsonl'
-    data_args.pack_size = 512
+    data_args.extractor_type = 'tts_codec'
     dataset = SpeechDataset(tokenizer, data_args)
     for i, x in enumerate(dataset):
         print(x)

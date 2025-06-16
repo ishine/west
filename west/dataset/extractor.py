@@ -17,6 +17,42 @@ class Extractor(ABC):
         pass
 
 
+class ExtractorTtsCodec(Extractor):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def extract(self, item):
+        import s3tokenizer
+        tokenizer = self.kwargs.get('tokenizer')
+        inference = self.kwargs.get('inference', False)
+        IGNORE_TOKEN_ID = LabelSmoother.ignore_index
+        print(type(item['wav']))
+        print(item['wav'])
+        mel = s3tokenizer.log_mel_spectrogram(item['wav'])
+        mel = mel.transpose(0, 1)
+        # There is 100 frames mel per second, and 25 tokens per second
+        num_audio_token = int(mel.size(0) / 100.0 * 25)
+        content = item['txt'] + '<|audio_bos|>'
+        ids_text = [tokenizer.bos_token_id] + tokenizer.encode(content)
+        tgt_text = [IGNORE_TOKEN_ID] * len(ids_text)
+        ids_audio = [0] * num_audio_token
+        if not inference:
+            ids = ids_text + ids_audio + [tokenizer.eos_token_id]
+            tgt = tgt_text + ids_audio + [tokenizer.eos_token_id]
+        else:
+            ids = ids_text
+            tgt = tgt_text
+        input_ids = torch.tensor(ids, dtype=torch.int)
+        tgt_ids = torch.tensor(tgt, dtype=torch.long)
+        return {
+            'input_ids': input_ids,
+            'labels': tgt_ids,
+            'mel': mel,
+            'offset': len(ids_text),
+        }
+
+
 class ExtractorAsrWenet(Extractor):
 
     def __init__(self, **kwargs):
@@ -72,6 +108,7 @@ class ExtractorFactory:
     def create(extractor_type: str) -> Extractor:
         classes = {
             'asr_wenet': ExtractorAsrWenet,
+            'tts_codec': ExtractorTtsCodec,
         }
         if extractor_type.lower() in classes:
             return classes[extractor_type.lower()]
