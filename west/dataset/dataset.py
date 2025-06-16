@@ -4,14 +4,14 @@ import json
 from dataclasses import dataclass, field
 from typing import Dict
 
-import torch.distributed as dist
-from torch.utils.data import IterableDataset
-from torch.nn.utils.rnn import pad_sequence
-from transformers.trainer_pt_utils import LabelSmoother
 import torch
-import torchaudio
+import torch.distributed as dist
 import transformers
 import webdataset as wds
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import IterableDataset
+from transformers.trainer_pt_utils import LabelSmoother
+from west.dataset.extractor import ExtractorFactory
 
 
 @dataclass
@@ -51,10 +51,14 @@ class SpeechDataset(IterableDataset):
         try:
             self.world_size = dist.get_world_size()
             self.rank = dist.get_rank()
-        except Exception as e:
+        except Exception:
             self.world_size = 1
             self.rank = 0
         self.data_args = data_args
+        self.extractor = ExtractorFactory.create('asr_wenet')(
+            tokenizer=tokenizer,
+            inference=inference,
+        )
 
     def _read_one(self):
         raw = self.data_path.endswith('.jsonl')
@@ -69,47 +73,6 @@ class SpeechDataset(IterableDataset):
                         for x in data:
                             x['txt'] = x['txt'].decode('utf8')
                             yield x
-
-    def _extract(self, item):
-        IGNORE_TOKEN_ID = LabelSmoother.ignore_index
-        audio, sample_rate = torchaudio.load(item['wav'])
-        if sample_rate != 16000:
-            audio = torchaudio.transforms.Resample(sample_rate, 16000)(audio)
-        audio = audio * (1 << 15)
-        # mel: (T, 80)
-        mel = torchaudio.compliance.kaldi.fbank(audio,
-                                                num_mel_bins=80,
-                                                frame_length=25,
-                                                frame_shift=10,
-                                                dither=0.0,
-                                                energy_floor=0.0,
-                                                sample_frequency=16000)
-        # TODO(Binbin Zhang): Refine to instruction + <AUDIO>
-        ids_audio = [0] * (mel.size(0) // 8)  # 8 is the final subsampling rate
-        tgt_audio = [IGNORE_TOKEN_ID] * len(ids_audio)
-        instruction = 'Transcribe the speech'
-        content = item['txt']
-        t0 = '<|im_start|>system\n' + \
-             'You are a helpful assistant<|im_end|>\n' + \
-             '<|im_start|>user\n' + instruction + '<|audio_bos|>'
-        t1 = '<|audio_eos|><|im_end|>\n' + '<|im_start|>assistant\n'
-        ids0 = self.tokenizer.encode(t0)
-        ids1 = self.tokenizer.encode(t1)
-        ids = [self.tokenizer.bos_token_id] + ids0 + ids_audio + ids1
-        tgt = [self.tokenizer.bos_token_id] + ids0 + tgt_audio + ids1
-        if not self.inference:
-            t2 = content + '<|im_end|>\n'
-            ids2 = self.tokenizer.encode(t2)
-            ids = ids + ids2 + [self.tokenizer.eos_token_id]
-            tgt = tgt + ids2 + [self.tokenizer.eos_token_id]
-        input_ids = torch.tensor(ids, dtype=torch.int)
-        tgt_ids = torch.tensor(tgt, dtype=torch.long)
-        return {
-            'input_ids': input_ids,
-            'labels': tgt_ids,
-            'mel': mel,
-            'offset': len(ids0),
-        }
 
     def _pack_sequence(self, seqs):
         """
@@ -188,7 +151,7 @@ class SpeechDataset(IterableDataset):
         buffer = []
         total_length = 0
         for item in self._read_one():
-            data = self._extract(item)
+            data = self.extractor.extract(item)
             if data['mel'].size(0) > self.data_args.max_speech_frames and \
                not self.inference:
                 continue
@@ -212,8 +175,7 @@ class SpeechDataset(IterableDataset):
 if __name__ == '__main__':
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(
-        '/jfs-hdfs/user/binbin.zhang/huggingface/hub/Qwen2-1.5B-Instruct'
-    )
+        '/jfs-hdfs/user/binbin.zhang/huggingface/hub/Qwen2-1.5B-Instruct')
     tokenizer.bos_token = tokenizer.eos_token
     print(tokenizer.bos_token_id)
     data_args = DataArguments
