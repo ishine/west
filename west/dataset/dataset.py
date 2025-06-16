@@ -1,6 +1,5 @@
 # Copyright (c) 2025 Binbin Zhang(binbzha@qq.com)
 
-import math
 import json
 from dataclasses import dataclass, field
 from typing import Dict
@@ -10,11 +9,9 @@ from torch.utils.data import IterableDataset
 from torch.nn.utils.rnn import pad_sequence
 from transformers.trainer_pt_utils import LabelSmoother
 import torch
-import torch.nn.functional as F
 import torchaudio
 import transformers
 import webdataset as wds
-import whisper
 
 
 @dataclass
@@ -30,9 +27,6 @@ class DataArguments:
             "given in batch_size"
         })
     max_speech_frames: int = 1000
-    order: str = field(
-        default="instruction_first",
-        metadata={"help": "Order, either 'audio_first' or 'instruction_first'"})
 
 
 class SpeechDataset(IterableDataset):
@@ -57,7 +51,7 @@ class SpeechDataset(IterableDataset):
         try:
             self.world_size = dist.get_world_size()
             self.rank = dist.get_rank()
-        except:
+        except Exception as e:
             self.world_size = 1
             self.rank = 0
         self.data_args = data_args
@@ -95,19 +89,10 @@ class SpeechDataset(IterableDataset):
         tgt_audio = [IGNORE_TOKEN_ID] * len(ids_audio)
         instruction = 'Transcribe the speech'
         content = item['txt']
-        # 0) audio first 1) instruction first
-        if self.data_args.order == 'audio_first':
-            t0 = '<|audio_bos|>'
-            t1 = '<|audio_eos|><|im_start|>system\n' + \
-                 'You are a helpful assistant<|im_end|>\n' + \
-                  '<|im_start|>user\n' + \
-                  instruction + '<|im_end|>\n' + \
-                  '<|im_start|>assistant\n'
-        else:
-            t0 = '<|im_start|>system\n' + \
-                 'You are a helpful assistant<|im_end|>\n' + \
-                 '<|im_start|>user\n' + instruction  + '<|audio_bos|>'
-            t1 = '<|audio_eos|><|im_end|>\n' + '<|im_start|>assistant\n'
+        t0 = '<|im_start|>system\n' + \
+             'You are a helpful assistant<|im_end|>\n' + \
+             '<|im_start|>user\n' + instruction + '<|audio_bos|>'
+        t1 = '<|audio_eos|><|im_end|>\n' + '<|im_start|>assistant\n'
         ids0 = self.tokenizer.encode(t0)
         ids1 = self.tokenizer.encode(t1)
         ids = [self.tokenizer.bos_token_id] + ids0 + ids_audio + ids1
@@ -226,9 +211,8 @@ class SpeechDataset(IterableDataset):
 
 if __name__ == '__main__':
     from transformers import AutoTokenizer
-    import numpy as np
     tokenizer = AutoTokenizer.from_pretrained(
-        '/bucket/output/jfs-hdfs/user/binbin.zhang/huggingface/hub/Qwen2-1.5B-Instruct'
+        '/jfs-hdfs/user/binbin.zhang/huggingface/hub/Qwen2-1.5B-Instruct'
     )
     tokenizer.bos_token = tokenizer.eos_token
     print(tokenizer.bos_token_id)
@@ -238,4 +222,5 @@ if __name__ == '__main__':
     dataset = SpeechDataset(tokenizer, data_args)
     for i, x in enumerate(dataset):
         print(x)
-        if i > 0: break
+        if i > 0:
+            break
