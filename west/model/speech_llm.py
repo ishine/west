@@ -79,7 +79,7 @@ class SpeechLLM(PreTrainedModel):
         for k in self.encoder.state_dict().keys():
             self._keys_to_ignore_on_save.add('encoder.' + k)
         self.model_args = model_args
-        self.num_setences = 0
+        self.num_sentences = 0
 
     def get_speech_embeddings(self, audio_features, audio_feature_lengths):
         speech_emb, mask = self.encoder._forward_encoder(
@@ -88,6 +88,24 @@ class SpeechLLM(PreTrainedModel):
         speech_proj = self.projector(speech_emb)
         speech_proj_lens = mask.squeeze(1).sum(1) // self.projector.k
         return speech_proj, speech_proj_lens
+
+    def compute_mix_embedding(
+        self,
+        input_ids: torch.LongTensor = None,
+        audio_offsets: Optional[torch.LongTensor] = None,
+        audio_features: Optional[torch.FloatTensor] = None,
+        audio_feature_lengths: Optional[torch.LongTensor] = None,
+        batch_idx: Optional[torch.LongTensor] = None,
+    ):
+        text_emb = self.llm.get_input_embeddings()(input_ids)
+        speech_emb, speech_emb_lens = self.get_speech_embeddings(
+            audio_features, audio_feature_lengths)
+        inputs_embeds = text_emb
+        for i in range(audio_features.size(0)):
+            b = batch_idx[i]
+            s, e = audio_offsets[i], audio_offsets[i] + speech_emb_lens[i]
+            inputs_embeds[b, s:e, :] = speech_emb[i, :speech_emb_lens[i], :]
+        return inputs_embeds
 
     @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     def forward(
@@ -99,35 +117,23 @@ class SpeechLLM(PreTrainedModel):
         audio_offsets: Optional[torch.LongTensor] = None,
         audio_features: Optional[torch.FloatTensor] = None,
         audio_feature_lengths: Optional[torch.LongTensor] = None,
+        batch_idx: Optional[torch.LongTensor] = None,
         **kwargs,
     ):
-        text_emb = self.llm.get_input_embeddings()(input_ids)
-        speech_emb, speech_emb_lens = self.get_speech_embeddings(
-            audio_features, audio_feature_lengths)
-        inputs_embeds = text_emb
-        if position_ids is None:  # batch
-            batch_size = input_ids.size(0)
-            for i in range(batch_size):
-                s, e = audio_offsets[i], audio_offsets[i] + speech_emb_lens[i]
-                inputs_embeds[i, s:e, :] = speech_emb[i, :speech_emb_lens[i], :]
-            out = self.llm(inputs_embeds=inputs_embeds,
-                           attention_mask=attention_mask,
-                           labels=labels)
-            self.num_setences += batch_size
-        else:  # sequence pack
-            batch_size = audio_offsets.size(0)
-            for i in range(batch_size):
-                s, e = audio_offsets[i], audio_offsets[i] + speech_emb_lens[i]
-                inputs_embeds[s:e, :] = speech_emb[i, :speech_emb_lens[i], :]
-            out = self.llm(
-                inputs_embeds=inputs_embeds.unsqueeze(0),
-                # attention_mask=attention_mask.unsqueeze(0),
-                position_ids=position_ids.unsqueeze(0),
-                labels=labels.unsqueeze(0),
-                **kwargs,
-            )
-            self.num_setences += batch_size
-        logging.info('Train finish {} sentences'.format(self.num_setences))
+        inputs_embeds = self.compute_mix_embedding(
+            input_ids,
+            audio_offsets,
+            audio_features,
+            audio_feature_lengths,
+            batch_idx,
+        )
+        out = self.llm(inputs_embeds=inputs_embeds,
+                       attention_mask=attention_mask,
+                       labels=labels,
+                       position_ids=position_ids,
+                       **kwargs)
+        self.num_sentences += audio_features.size(0)
+        logging.info('Train finish {} sentences'.format(self.num_sentences))
         return out
 
     @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
@@ -139,17 +145,17 @@ class SpeechLLM(PreTrainedModel):
         audio_offsets: Optional[torch.LongTensor] = None,
         audio_features: Optional[torch.FloatTensor] = None,
         audio_feature_lengths: Optional[torch.LongTensor] = None,
+        batch_idx: Optional[torch.LongTensor] = None,
         eos_token_id=None,
         decode_config=None,
     ):
-        batch_size = input_ids.size(0)
-        text_emb = self.llm.get_input_embeddings()(input_ids)
-        speech_emb, speech_emb_lens = self.get_speech_embeddings(
-            audio_features, audio_feature_lengths)
-        inputs_embeds = text_emb
-        for i in range(batch_size):
-            s, e = audio_offsets[i], audio_offsets[i] + speech_emb_lens[i]
-            inputs_embeds[i, s:e, :] = speech_emb[i, :speech_emb_lens[i], :]
+        inputs_embeds = self.compute_mix_embedding(
+            input_ids,
+            audio_offsets,
+            audio_features,
+            audio_feature_lengths,
+            batch_idx,
+        )
         model_outputs = self.llm.generate(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,

@@ -89,11 +89,11 @@ class SpeechDataset(IterableDataset):
 
         """
         pack_size = self.pack_size
-        # pack_size = sum([len(seq['input_ids']) for seq in seqs])
         IGNORE_TOKEN_ID = LabelSmoother.ignore_index
         input_ids = torch.tensor([0] * pack_size, dtype=torch.int)
         labels = torch.tensor([IGNORE_TOKEN_ID] * pack_size, dtype=torch.long)
         position_ids = torch.tensor([0] * pack_size, dtype=torch.int)
+        batch_idx = torch.tensor([0] * len(seqs), dtype=torch.int)
         audio_offsets = torch.tensor([0] * len(seqs), dtype=torch.int)
         seq_ids = torch.tensor([0] * pack_size, dtype=torch.int)
         audio_features = []
@@ -119,13 +119,14 @@ class SpeechDataset(IterableDataset):
         audio_features = pad_sequence(audio_features, batch_first=True)
         cu_seq_lens = torch.tensor(cu_seq_lens, dtype=torch.int)
         return {
-            'input_ids': input_ids,
-            'labels': labels,
-            'attention_mask': seq_ids,
-            'position_ids': position_ids,
+            'input_ids': input_ids.unsqueeze(0),
+            'labels': labels.unsqueeze(0),
+            # 'attention_mask': seq_ids,  # only used for flex attention
+            'position_ids': position_ids.unsqueeze(0),
             'audio_offsets': audio_offsets,
             'audio_features': audio_features,
             'audio_feature_lengths': audio_feature_lengths,
+            'batch_idx': batch_idx,
         }
 
     def _batch(self, seqs):
@@ -142,6 +143,7 @@ class SpeechDataset(IterableDataset):
         attention_mask = input_ids.ne(self.tokenizer.pad_token_id)
         audio_offsets = torch.tensor([s['offset'] for s in seqs],
                                      dtype=torch.int)
+        batch_idx = torch.tensor(list(range(len(seqs))), dtype=torch.int)
         return {
             'input_ids': input_ids,
             'labels': labels,
@@ -149,6 +151,7 @@ class SpeechDataset(IterableDataset):
             'audio_offsets': audio_offsets,
             'audio_features': audio_features,
             'audio_feature_lengths': audio_feature_lengths,
+            'batch_idx': batch_idx,
         }
 
     def __iter__(self) -> Dict[str, torch.Tensor]:

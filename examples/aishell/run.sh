@@ -56,9 +56,8 @@ fi
 
 if [ $stage == "decode" ] || [ $stage == "all" ]; then
     mdir=$dir/checkpoint-${steps}
-    python decode.py \
+    python west/bin/decode.py \
         --llm_model_name_or_path $llm \
-        --encoder_type wenet \
         --wenet_model_name_or_path $speech_encoder \
         --projector_model_path $mdir/model.safetensors \
         --encoder_projector_ds_rate 2 \
