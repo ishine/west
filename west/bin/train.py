@@ -10,10 +10,9 @@ from typing import Any, Union
 import torch
 import transformers
 from torch import nn
-from transformers import AutoTokenizer, Trainer, TrainerCallback
-
+from transformers import Trainer, TrainerCallback
 from west.dataset.dataset import DataArguments, SpeechDataset
-from west.model.speech_llm import ModelArguments, init_model
+from west.models.model import Model, ModelArgs
 
 
 @dataclass
@@ -102,39 +101,19 @@ def main():
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-
     parser = transformers.HfArgumentParser(
-        (ModelArguments, DataArguments, TrainingArguments))
-    (
-        model_args,
-        data_args,
-        training_args,
-    ) = parser.parse_args_into_dataclasses()
-
-    model = init_model(model_args)
-    model.freeze_llm()
-    model.freeze_encoder()
-
-    if training_args.gradient_checkpointing:
-        model.enable_input_require_grads()
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.llm_model_name_or_path,
-        model_max_length=model_args.model_max_length,
-        padding_side="right",
-    )
-
-    if 'Qwen' in model_args.llm_model_name_or_path:
-        tokenizer.bos_token = tokenizer.eos_token
-    elif 'llama' in model_args.llm_model_name_or_path:
-        tokenizer.pad_token = '<|finetune_right_pad_id|>'
+        (ModelArgs, DataArguments, TrainingArguments))
+    (model_args, data_args,
+     training_args) = parser.parse_args_into_dataclasses()
+    model_class = Model.get_class(model_args.model_type)
+    model = model_class.init_model(model_args)
+    tokenizer = model_class.init_tokenizer(model_args)
 
     print("Loading data...")
     train_dataset = SpeechDataset(tokenizer, data_args)
     # Start trainer
     trainer = MyTrainer(
         model=model,
-        tokenizer=tokenizer,
         args=training_args,
         train_dataset=train_dataset,
         data_collator=lambda x: x[0],

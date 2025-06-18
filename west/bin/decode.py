@@ -7,10 +7,8 @@ import transformers
 from accelerate import Accelerator
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from transformers import AutoTokenizer
-
 from west.dataset.dataset import DataArguments, SpeechDataset
-from west.model.speech_llm import ModelArguments, init_model
+from west.models.model import Model, ModelArgs
 
 
 @dataclass
@@ -23,16 +21,15 @@ class DecodeArguments:
 
 def main():
     parser = transformers.HfArgumentParser(
-        (ModelArguments, DataArguments, DecodeArguments))
+        (ModelArgs, DataArguments, DecodeArguments))
     model_args, data_args, decode_args = parser.parse_args_into_dataclasses()
-    model = init_model(model_args)
-    tokenizer = AutoTokenizer.from_pretrained(model_args.llm_model_name_or_path)
+    model_class = Model.get_class(model_args.model_type)
+    model = model_class.init_model(model_args)
+    tokenizer = model_class.init_tokenizer(model_args)
     if decode_args.llm_type == 'qwen2':
-        tokenizer.bos_token = tokenizer.eos_token
         eos_token_id = tokenizer.convert_tokens_to_ids(
             ['<|endoftext|>', '<|im_end|>'])
     else:
-        tokenizer.pad_token = '<|finetune_right_pad_id|>'
         eos_token_id = tokenizer.convert_tokens_to_ids(
             ['<|end_of_text|>', '<|eot_id|>'])
     print('eos_token_id', eos_token_id)

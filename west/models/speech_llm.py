@@ -9,11 +9,14 @@ import torch
 import transformers
 import wenet
 from torch import nn
-from transformers import AutoModelForCausalLM, PreTrainedModel
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
+
+from .model import Model, ModelArgs
 
 
+@ModelArgs.register
 @dataclass
-class ModelArguments:
+class SpeechLLMArgs:
     llm_model_name_or_path: Optional[str] = field(default="Qwen/Qwen2-7B")
     wenet_model_name_or_path: Optional[str] = field(default="")
     encoder_ds_rate: int = 2
@@ -57,7 +60,8 @@ def freeze_model(model):
         param.requires_grad = False
 
 
-class SpeechLLM(PreTrainedModel):
+class SpeechLLM(PreTrainedModel, Model):
+    model_type = 'speech_llm'
     supports_gradient_checkpointing = True
 
     def __init__(
@@ -66,7 +70,7 @@ class SpeechLLM(PreTrainedModel):
         encoder: nn.Module,
         projector: nn.Module,
         config,
-        model_args: ModelArguments,
+        model_args: SpeechLLMArgs,
     ):
         super().__init__(config)
         self.llm = llm
@@ -181,27 +185,43 @@ class SpeechLLM(PreTrainedModel):
         projector_state_dict = safetensors.torch.load_file(projector_path)
         self.load_state_dict(projector_state_dict, strict=False)
 
+    @staticmethod
+    def init_model(model_args):
+        encoder = wenet.load_model_pt(model_args.wenet_model_name_or_path)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        encoder = encoder.to(device)
+        # Load llm model and tokenizer
+        config = transformers.AutoConfig.from_pretrained(
+            model_args.llm_model_name_or_path)
+        config.use_cache = False
+        llm_model = AutoModelForCausalLM.from_pretrained(
+            model_args.llm_model_name_or_path,
+            config=config,
+            torch_dtype='auto',
+            attn_implementation="flash_attention_2",  # or "flex_attention"
+        )
+        encoder_dim = encoder.encoder.output_size()
+        llm_dim = config.hidden_size
+        projector = ProjectorCov1d(model_args, encoder_dim, llm_dim)
+        total_params = sum(p.numel() for p in projector.parameters())
+        print('Projector total params: {:.2f}M'.format(total_params / 1024 /
+                                                       1024))
+        model = SpeechLLM(llm_model, encoder, projector, config, model_args)
+        if model_args.projector_model_path is not None:
+            model.load_projector(model_args.projector_model_path)
+        model.freeze_encoder()
+        model.freeze_llm()
+        return model
 
-def init_model(model_args):
-    encoder = wenet.load_model_pt(model_args.wenet_model_name_or_path)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    encoder = encoder.to(device)
-    # Load llm model and tokenizer
-    config = transformers.AutoConfig.from_pretrained(
-        model_args.llm_model_name_or_path)
-    config.use_cache = False
-    llm_model = AutoModelForCausalLM.from_pretrained(
-        model_args.llm_model_name_or_path,
-        config=config,
-        torch_dtype='auto',
-        attn_implementation="flash_attention_2",  # or "flex_attention"
-    )
-    encoder_dim = encoder.encoder.output_size()
-    llm_dim = config.hidden_size
-    projector = ProjectorCov1d(model_args, encoder_dim, llm_dim)
-    total_params = sum(p.numel() for p in projector.parameters())
-    print('Projector total params: {:.2f}M'.format(total_params / 1024 / 1024))
-    model = SpeechLLM(llm_model, encoder, projector, config, model_args)
-    if model_args.projector_model_path is not None:
-        model.load_projector(model_args.projector_model_path)
-    return model
+    @staticmethod
+    def init_tokenizer(model_args):
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_args.llm_model_name_or_path,
+            model_max_length=model_args.model_max_length,
+            padding_side="right",
+        )
+        if 'Qwen' in model_args.llm_model_name_or_path:
+            tokenizer.bos_token = tokenizer.eos_token
+        elif 'llama' in model_args.llm_model_name_or_path:
+            tokenizer.pad_token = '<|finetune_right_pad_id|>'
+        return tokenizer
