@@ -1,4 +1,5 @@
 # Copyright (c) 2025 Binbin Zhang(binbzha@qq.com)
+import math
 from abc import ABC, abstractmethod
 
 import torch
@@ -29,8 +30,11 @@ class ExtractorTtsCodec(Extractor):
         mel = s3tokenizer.log_mel_spectrogram(item['wav'])
         mel = mel.transpose(0, 1)
         # There is 100 frames mel per second, and 25 tokens per second
-        num_audio_token = int(mel.size(0) / 100.0 * 25)
-        content = item['txt'] + '<|audio_bos|>'
+        num_audio_token = math.ceil(mel.size(0) / 100.0 * 25)
+        if not inference:
+            content = item['txt'] + '<|audio_bos|>'
+        else:
+            content = item['txt'] + item['syn_txt'] + '<|audio_bos|>'
         ids_text = [tokenizer.bos_token_id] + tokenizer.encode(content)
         tgt_text = [IGNORE_TOKEN_ID] * len(ids_text)
         ids_audio = [0] * num_audio_token
@@ -38,9 +42,9 @@ class ExtractorTtsCodec(Extractor):
             ids = ids_text + ids_audio + [tokenizer.eos_token_id]
             tgt = tgt_text + ids_audio + [tokenizer.eos_token_id]
         else:
-            ids = ids_text
-            tgt = tgt_text
-        input_ids = torch.tensor(ids, dtype=torch.int)
+            ids = ids_text + ids_audio
+            tgt = tgt_text + ids_audio
+        input_ids = torch.tensor(ids, dtype=torch.long)
         tgt_ids = torch.tensor(tgt, dtype=torch.long)
         return {
             'input_ids': input_ids,
