@@ -1,7 +1,7 @@
 # Copyright 2025 Binbin Zhang(binbzha@qq.com)
 
-[ ! -s west ] && ln -s ../../west
-[ ! -s tools ] && ln -s ../../tools
+[ ! -s west ] && ln -s ../../../west
+[ ! -s tools ] && ln -s ../../../tools
 export PYTHONPATH=$PYTHONPATH:$PWD
 
 export CUDA_VISIBLE_DEVICES="0"  # Change this to all your available gpus, such as "0,1,2,3"
