@@ -11,7 +11,7 @@ from west.dataset.extractor import Extractor
 
 class ExtractorTtsCodec(Extractor):
     extractor_type = 'tts_codec'
-    fields_batch_static = {'audio_offsets'}
+    fields_batch_static = {'audio_offsets', 'text_lengths'}
     fields_batch_dynamic = {'audio_features', 'input_ids', 'labels'}
     fields_pack_offset = {'audio_offsets'}
 
@@ -50,4 +50,5 @@ class ExtractorTtsCodec(Extractor):
             'labels': tgt_ids,
             'audio_features': mel,
             'audio_offsets': len(ids_text),
+            'text_lengths': len(item.get('syn_txt', ''))
         }

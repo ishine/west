@@ -113,6 +113,7 @@ class CodecLLM(PreTrainedModel, Model):
         audio_features: Optional[torch.FloatTensor] = None,
         audio_features_lengths: Optional[torch.LongTensor] = None,
         batch_idx: Optional[torch.LongTensor] = None,
+        text_lengths: Optional[torch.LongTensor] = None,
         eos_token_id=None,
         decode_config=None,
     ):
@@ -120,7 +121,7 @@ class CodecLLM(PreTrainedModel, Model):
         input_ids, labels = self.reorg_ids(input_ids, labels, audio_offsets,
                                            audio_features,
                                            audio_features_lengths, batch_idx)
-        token_length = audio_offsets[0]
+        token_length = text_lengths[0].item()
         min_length = token_length * 2
         max_length = token_length * 20
         # There is no prompt token output if we use `inputs_embeds`
@@ -133,8 +134,8 @@ class CodecLLM(PreTrainedModel, Model):
             top_p=0.8,
             top_k=10,
             repetition_penalty=1.4,
-            min_length=min_length,
-            max_length=max_length,
+            min_new_tokens=min_length,
+            max_new_tokens=max_length,
             eos_token_id=eos_token_id,
         )
         return model_outputs
