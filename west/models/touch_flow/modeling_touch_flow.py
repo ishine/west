@@ -11,14 +11,11 @@ import safetensors
 import torch
 import torch.nn.functional as F
 import wespeaker
-from torch.nn.utils.rnn import pad_sequence, unpad_sequence
 from transformers import (AutoConfig, AutoModelForCausalLM, AutoTokenizer,
                           PreTrainedModel)
 
 from west.models.model import Model, ModelArgs
 from west.utils.mask import make_pad_mask, non_causal_mask
-
-from .length_regulator import InterpolateRegulator
 
 
 @ModelArgs.register
@@ -74,8 +71,7 @@ class TouchFlow(PreTrainedModel, Model):
         speech_tokenizer = s3tokenizer.load_model(
             'speech_tokenizer_v1_25hz', args.s3tokenizer_model_name_or_path)
         self.speech_tokenizer = speech_tokenizer.to(device)
-        speaker_model = wespeaker.load_model_local(
-            args.speaker_model_path).model
+        speaker_model = wespeaker.load_model_pt(args.speaker_model_path)
         self.speaker_model = speaker_model.to(device)
         # Load llm model and tokenizer
         self.llm = AutoModelForCausalLM.from_config(config=config)
@@ -87,7 +83,6 @@ class TouchFlow(PreTrainedModel, Model):
         freeze_model(self.speech_tokenizer)
         freeze_model(self.speaker_model)
         self.vocab_size = self.llm.vocab_size
-        self.length_regulator = InterpolateRegulator()
         mel_dim = 80
         hidden_size = config.hidden_size
         self.spk_encoder = torch.nn.Linear(192, mel_dim)
@@ -109,6 +104,14 @@ class TouchFlow(PreTrainedModel, Model):
             state_dict = safetensors.torch.load_file(args.flow_model_path)
             self.load_state_dict(state_dict, strict=False)
 
+    def interpolate(self, x, ylens=None):
+        # x in (B, T, D)
+        mask = (~make_pad_mask(ylens)).to(x).unsqueeze(-1)
+        x = F.interpolate(x.transpose(1, 2).contiguous(),
+                          size=ylens.max(), mode='linear')
+        out = x.transpose(1, 2).contiguous()
+        return out * mask, ylens
+
     def forward(
         self,
         mel_speaker: Optional[torch.FloatTensor] = None,
@@ -117,6 +120,7 @@ class TouchFlow(PreTrainedModel, Model):
         mel_token_lengths: Optional[torch.LongTensor] = None,
         mel_vocoder: Optional[torch.FloatTensor] = None,
         mel_vocoder_lengths: Optional[torch.LongTensor] = None,
+        **kwargs,
     ):
         """ All mel_* tensors are in (B, T, D)
         """
@@ -127,38 +131,16 @@ class TouchFlow(PreTrainedModel, Model):
         # Condition speech token, compute speech token on-the-fly
         speech_token, speech_token_lengths = self.speech_tokenizer.quantize(
             mel_token.transpose(1, 2), mel_token_lengths)
-        # token_emb = self.llm.model.embed_tokens(speech_token)
-        # token_cond = self.token_encoder(token_emb)
-        # token_cond = F.interpolate(token_cond.transpose(1, 2),
-        #                            size=T,
-        #                            mode='nearest')
-        # token_cond = token_cond.transpose(1, 2)  # (B, T, M)
-        speech_token = unpad_sequence(speech_token,
-                                      speech_token_lengths,
-                                      batch_first=True)
-        token_cond = []
-        for i, y in enumerate(speech_token):
-            emb = self.token_encoder(self.llm.model.embed_tokens(y))
-            emb, _ = self.length_regulator(emb.unsqueeze(0),
-                                           mel_vocoder_lengths[i].unsqueeze(0))
-            token_cond.append(emb.squeeze(0))
-        token_cond = pad_sequence(token_cond,
-                                  batch_first=True,
-                                  padding_value=0.0).to(device)  # (B, T, M)
+        speech_token = speech_token.clone()
+        emb = self.token_encoder(self.llm.model.embed_tokens(speech_token))
+        mask = ~make_pad_mask(speech_token_lengths).to(device)
+        emb = emb * mask.unsqueeze(-1)
+        token_cond, _ = self.interpolate(emb, mel_vocoder_lengths)
         # Condition speaker embedding, compute speaker embedding on-the-fly
         # Use the min length in batch to compute embedding for each item
-        # min_length = torch.min(mel_speaker_lengths)
-        # spk_emb = self.speaker_model(mel_speaker[:, :min_length, :])
         spk_emb = self.speaker_model(mel_speaker)
         spk_cond = self.spk_encoder(F.normalize(spk_emb, dim=1))
-        # spk_cond = self.spk_encoder(spk_emb)
         spk_cond = spk_cond.unsqueeze(1).repeat(1, T, 1)  # (B, T, M)
-        # spk_cond = torch.zeros((B, 80), dtype=torch.float, device=device)
-        # for i in range(B):
-        #     m = mel_speaker[i, :mel_speaker_lengths[i],:].unsqueeze(0)
-        #     m = self.speaker_model(m)
-        #     spk_cond[i] = self.spk_encoder(F.normalize(m, dim=1)).squeeze(0)
-        # spk_cond = spk_cond.unsqueeze(1).repeat(1, T, 1)  # (B, T, M)
         # Condition mel prompt, sample at the begining in traning, and
         # we can use prompt speech as condition in inference.
         mel_cond = torch.zeros(mel_vocoder.shape, device=device)  # (B, T, M)
@@ -214,6 +196,7 @@ class TouchFlow(PreTrainedModel, Model):
         mel_vocoder: Optional[torch.FloatTensor] = None,
         mel_vocoder_lengths: Optional[torch.LongTensor] = None,
         llm_token: Optional[torch.LongTensor] = None,
+        **kwargs,
     ):
         """
         Args:
@@ -230,19 +213,11 @@ class TouchFlow(PreTrainedModel, Model):
         T = mel_len1 + mel_len2
         speech_token = torch.concat([prompt_token, llm_token], dim=1)
 
-        # token_emb = self.llm.model.embed_tokens(speech_token)
-        # token_cond = self.token_encoder(token_emb)
-        # token_cond = F.interpolate(token_cond.transpose(1, 2),
-        #                            size=T,
-        #                            mode='nearest')
-        # token_cond = token_cond.transpose(1, 2)  # (B, T, M)
-
         emb = self.token_encoder(self.llm.model.embed_tokens(speech_token[0]))
         output_length = torch.tensor([T], dtype=torch.long, device=device)
-        token_cond, _ = self.length_regulator(emb.unsqueeze(0), output_length)
+        token_cond, _ = self.interpolate(emb.unsqueeze(0), output_length)
         # Condition speaker embedding, compute speaker embedding on-the-fly
         spk_emb = self.speaker_model(mel_speaker)
-        # spk_cond = self.spk_encoder(spk_emb)
         spk_cond = self.spk_encoder(F.normalize(spk_emb, dim=1))
         spk_cond = spk_cond.unsqueeze(1).repeat(1, T, 1)  # (B, T, M)
         # Condition mel prompt
@@ -267,7 +242,7 @@ class TouchFlow(PreTrainedModel, Model):
         vocoder_lengths = torch.tensor([T], dtype=torch.long, device=device)
         att_mask = non_causal_mask(vocoder_lengths).to(device)  # (B, T, T)
         att_mask = att_mask.unsqueeze(1)  # (B, 1, T, T)
-        for step in range(1, self.args.n_timesteps):
+        for step in range(1, len(t_span)):
             x_in[:, :, 0:M] = pt
             t_cond = self.time_encoder(
                 self.time_embeddings(t.squeeze()).to(t.dtype))
