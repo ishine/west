@@ -1,34 +1,16 @@
 # Copyright (c) 2025 Binbin Zhang(binbzha@qq.com)
 
-import logging
-from dataclasses import dataclass, field
 from typing import Optional
 
 import safetensors
 import torch
-import transformers
 import wenet
 from peft import LoraConfig, get_peft_model
 from torch import nn
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
+from transformers import (AutoConfig, AutoModelForCausalLM, AutoTokenizer,
+                          PreTrainedModel)
 
-from west.models.model import Model, ModelArgs
-
-
-@ModelArgs.register
-@dataclass
-class TouchASUArgs:
-    llm_model_name_or_path: Optional[str] = field(default="Qwen/Qwen2-7B")
-    wenet_model_name_or_path: Optional[str] = field(default="")
-    encoder_ds_rate: int = 2
-    encoder_projector_ds_rate: int = 5
-    projector_hidden_size: int = 2048
-    projector_model_path: Optional[str] = field(default=None)
-    model_max_length: int = field(
-        default=8192,
-        metadata={"help": "Maximum sequence length"},
-    )
-    use_lora: bool = field(default=False, metadata={"help": "Use LoRA"})
+from .configuration_touch_asu import TouchASUConfig
 
 
 class ProjectorCov1d(nn.Module):
@@ -62,58 +44,39 @@ def freeze_model(model):
         param.requires_grad = False
 
 
-class TouchASU(PreTrainedModel, Model):
+class TouchASU(PreTrainedModel):
     """ LLM based Automatic Speech Understanding
     """
     model_type = 'touch_asu'
+    config_class = TouchASUConfig
     supports_gradient_checkpointing = True
 
-    def __init__(self, config: TouchASUArgs):
-        llm_config = transformers.AutoConfig.from_pretrained(
-            config.llm_model_name_or_path)
-        llm_config.use_cache = False
-        super().__init__(llm_config)
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        encoder = wenet.load_model_pt(config.wenet_model_name_or_path)
-        self.encoder = encoder.to(device)
+    def __init__(self, config: TouchASUConfig):
+        super().__init__(config)
+        llm_config = AutoConfig.from_pretrained(config.llm_model_name_or_path)
         self.llm = AutoModelForCausalLM.from_pretrained(
             config.llm_model_name_or_path,
             config=llm_config,
             torch_dtype='auto',
             attn_implementation="flash_attention_2",  # or "flex_attention"
         )
-        encoder_dim = encoder.encoder.output_size()
-        llm_dim = llm_config.hidden_size
-        self.projector = ProjectorCov1d(config, encoder_dim, llm_dim)
+        self.encoder = wenet.load_model_pt(config.wenet_model_name_or_path)
+        encoder_dim = self.encoder.encoder.output_size()
+        config.hidden_size = llm_config.hidden_size  # for deepseed training
+        self.projector = ProjectorCov1d(config, encoder_dim,
+                                        llm_config.hidden_size)
         total_params = sum(p.numel() for p in self.projector.parameters())
         print('Projector total params: {:.2f}M'.format(total_params / 1024 /
                                                        1024))
-        if config.use_lora:
-            lora_config = LoraConfig(
-                r=64,
-                lora_alpha=16,
-                target_modules=[
-                    "q_proj",
-                    "k_proj",
-                    "v_proj",
-                    "o_proj",
-                    "up_proj",
-                    "gate_proj",
-                    "down_proj",
-                ],
-                lora_dropout=0.05,
-                task_type="CAUSAL_LM",
-                inference_mode=False,
-            )
+        if config.lora_config is not None:
+            lora_config = LoraConfig(**config.lora_config)
             self.llm = get_peft_model(self.llm, lora_config)
             self.llm.print_trainable_parameters()
 
-        if config.projector_model_path is not None:
-            self.load_projector(config.projector_model_path)
         self.freeze_encoder()
         self._keys_to_ignore_on_save = set()
         # Do not save the parameter of llm and speech encoder
-        if config.use_lora:
+        if config.lora_config is not None:
             for k in self.llm.state_dict().keys():
                 if list(self.llm.peft_config.keys())[0] not in k:
                     self._keys_to_ignore_on_save.add('llm.' + k)
@@ -123,7 +86,22 @@ class TouchASU(PreTrainedModel, Model):
             self.freeze_llm()
         for k in self.encoder.state_dict().keys():
             self._keys_to_ignore_on_save.add('encoder.' + k)
-        self.num_sentences = 0
+
+    def tie_weights(self):
+        return self.llm.tie_weights()
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path: str, *args,
+                        **kwargs):
+        """ The default `from_pretrained` does not init the parameters
+            of `self.llm` and `self.encoder`, so we custom it.
+        """
+        config = TouchASUConfig.from_pretrained(pretrained_model_name_or_path)
+        model = cls(config)
+        weights_path = f"{pretrained_model_name_or_path}/model.safetensors"
+        state_dict = safetensors.torch.load_file(weights_path)
+        model.load_state_dict(state_dict, strict=False)
+        return model
 
     def get_speech_embeddings(self, audio_features, audio_features_lengths):
         speech_emb, mask = self.encoder._forward_encoder(
@@ -176,8 +154,6 @@ class TouchASU(PreTrainedModel, Model):
                        labels=labels,
                        position_ids=position_ids,
                        **kwargs)
-        self.num_sentences += audio_features.size(0)
-        logging.info('Train finish {} sentences'.format(self.num_sentences))
         return out
 
     @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
@@ -221,19 +197,13 @@ class TouchASU(PreTrainedModel, Model):
     def freeze_llm(self):
         freeze_model(self.llm)
 
-    def load_projector(self, projector_path):
-        projector_state_dict = safetensors.torch.load_file(projector_path)
-        self.load_state_dict(projector_state_dict, strict=False)
-
-    @staticmethod
-    def init_tokenizer(config):
+    def init_tokenizer(self):
         tokenizer = AutoTokenizer.from_pretrained(
-            config.llm_model_name_or_path,
-            model_max_length=config.model_max_length,
+            self.config.llm_model_name_or_path,
             padding_side="right",
         )
-        if 'Qwen' in config.llm_model_name_or_path:
+        if 'Qwen' in self.config.llm_model_name_or_path:
             tokenizer.bos_token = tokenizer.eos_token
-        elif 'llama' in config.llm_model_name_or_path:
+        elif 'llama' in self.config.llm_model_name_or_path:
             tokenizer.pad_token = '<|finetune_right_pad_id|>'
         return tokenizer
