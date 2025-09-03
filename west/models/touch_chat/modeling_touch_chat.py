@@ -1,0 +1,150 @@
+# Copyright (c) 2025 Binbin Zhang(binbzha@qq.com)
+
+from typing import Optional
+
+import safetensors
+import torch
+from torch import nn
+from transformers import AutoModel, PreTrainedModel
+
+from .configuration_touch_chat import TouchChatConfig
+
+
+def freeze_model(model):
+    for _, param in model.named_parameters():
+        param.requires_grad = False
+
+
+class TouchChat(PreTrainedModel):
+    """ LLM based end to end Chat.
+        TouchChat consists of pretrained 'thinker' and 'talker'.
+    """
+    model_type = 'touch_chat'
+    config_class = TouchChatConfig
+    supports_gradient_checkpointing = True
+
+    def __init__(self, config: TouchChatConfig):
+        super().__init__(config)
+        self.thinker = AutoModel.from_pretrained(config.thinker_model_path)
+        self.talker = AutoModel.from_pretrained(config.talker_model_path)
+        self.config.hidden_size = self.thinker.config.hidden_size
+        proj_dim = self.config.projector_hidden_size
+        self.projector = nn.Sequential(
+            nn.Linear(self.thinker.config.hidden_size, proj_dim),
+            torch.nn.SiLU(),
+            nn.Linear(proj_dim, self.talker.config.hidden_size),
+        )
+        print(self.projector)
+        self._keys_to_ignore_on_save = set()
+        freeze_model(self.thinker)
+        for k in self.thinker.state_dict().keys():
+            self._keys_to_ignore_on_save.add('thinker.' + k)
+        # freeze_model(self.talker)
+        # for k in self.talker.state_dict().keys():
+        #     self._keys_to_ignore_on_save.add('talker.' + k)
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path: str, *args,
+                        **kwargs):
+        """ The default `from_pretrained` does not init the parameters
+            of `self.llm` and `self.encoder`, so we custom it.
+        """
+        config = TouchChatConfig.from_pretrained(pretrained_model_name_or_path)
+        model = cls(config)
+        weights_path = f"{pretrained_model_name_or_path}/model.safetensors"
+        state_dict = safetensors.torch.load_file(weights_path)
+        model.load_state_dict(state_dict, strict=False)
+        return model
+
+    @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        audio_offsets: Optional[torch.LongTensor] = None,
+        audio_features: Optional[torch.FloatTensor] = None,
+        audio_features_lengths: Optional[torch.LongTensor] = None,
+        talker_features: Optional[torch.FloatTensor] = None,
+        talker_features_lengths: Optional[torch.LongTensor] = None,
+        talker_offsets: Optional[torch.LongTensor] = None,
+        batch_idx: Optional[torch.LongTensor] = None,
+        has_audio: Optional[torch.BoolTensor] = None,
+        **kwargs,
+    ):
+        # TODO(Binbin Zhang): Whether to use loss of thinker
+        thinker_out = self.thinker(
+            input_ids,
+            attention_mask,
+            labels=None,  # Do not compute loss on thinker
+            position_ids=position_ids,
+            audio_offsets=audio_offsets,
+            audio_features=audio_features,
+            audio_features_lengths=audio_features_lengths,
+            batch_idx=batch_idx,
+            has_audio=has_audio,
+            output_hidden_states=True,  # return hidden states
+            **kwargs)
+        hidden_state = thinker_out.hidden_states[-1]  # last hidden
+        hidden_embs = self.projector(hidden_state)
+        out = self.talker(input_ids=input_ids,
+                          attention_mask=attention_mask,
+                          labels=labels,
+                          position_ids=position_ids,
+                          audio_offsets=talker_offsets,
+                          audio_features=talker_features,
+                          audio_features_lengths=talker_features_lengths,
+                          batch_idx=batch_idx,
+                          inputs_embeds=hidden_embs,
+                          **kwargs)
+        return out
+
+    @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    def generate(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        audio_offsets: Optional[torch.LongTensor] = None,
+        audio_features: Optional[torch.FloatTensor] = None,
+        audio_features_lengths: Optional[torch.LongTensor] = None,
+        batch_idx: Optional[torch.LongTensor] = None,
+        has_audio: Optional[torch.BoolTensor] = None,
+        **kwargs,
+    ):
+        thinker_out = self.thinker.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            audio_offsets=audio_offsets,
+            audio_features=audio_features,
+            audio_features_lengths=audio_features_lengths,
+            batch_idx=batch_idx,
+            has_audio=has_audio,
+            eos_token_id=self.eos_token_id,
+            return_dict_in_generate=True,
+            output_scores=True,
+            output_hidden_states=True)
+        text_lengths = torch.tensor([len(thinker_out.sequences[0])],
+                                    dtype=torch.long,
+                                    device=input_ids.device)
+        print('text len', text_lengths)
+        print(self.tokenizer.batch_decode(thinker_out.sequences.tolist()))
+        hidden_state = torch.cat([x[-1] for x in thinker_out.hidden_states],
+                                 dim=1)
+        hidden_embs = self.projector(hidden_state)
+        model_outputs = self.talker.generate(
+            text_lengths=text_lengths,
+            inputs_embeds=hidden_embs,
+            eos_token_id=self.eos_token_id,
+        )
+        print(model_outputs)
+        return model_outputs
+
+    def init_tokenizer(self):
+        # Here we assume thinker and talker shares the same tokenizer
+        self.tokenizer = self.talker.init_tokenizer()
+        self.eos_token_id = self.tokenizer.convert_tokens_to_ids(
+            ['<|endoftext|>', '<|im_end|>'])
+        return self.tokenizer

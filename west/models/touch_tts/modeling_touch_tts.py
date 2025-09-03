@@ -60,6 +60,7 @@ class TouchTTS(PreTrainedModel):
         audio_features: Optional[torch.FloatTensor] = None,
         audio_features_lengths: Optional[torch.LongTensor] = None,
         batch_idx: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.LongTensor] = None,
     ):
         """ Extract speech codes by speech tokenizer, and reorg that in
             `input_ids`, `labels`
@@ -73,7 +74,15 @@ class TouchTTS(PreTrainedModel):
                 i, :speech_codes_lens[i]] + self.speech_code_start_idx
             input_ids[b, s:e] = ids
             labels[b, s:e] = ids
-        return input_ids, labels
+        text_embs = self.llm.get_input_embeddings()(input_ids)
+        if inputs_embeds is None:
+            return text_embs, labels
+        else:  # replace speech token emb
+            for i in range(audio_features.size(0)):
+                b = batch_idx[i]
+                s, e = audio_offsets[i], audio_offsets[i] + speech_codes_lens[i]
+                inputs_embeds[b, s:e] = text_embs[b, s:e]
+            return inputs_embeds, labels
 
     @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     def forward(
@@ -86,12 +95,14 @@ class TouchTTS(PreTrainedModel):
         audio_features: Optional[torch.FloatTensor] = None,
         audio_features_lengths: Optional[torch.LongTensor] = None,
         batch_idx: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
         **kwargs,
     ):
-        input_ids, labels = self.reorg_ids(input_ids, labels, audio_offsets,
-                                           audio_features,
-                                           audio_features_lengths, batch_idx)
-        out = self.llm(input_ids=input_ids,
+        inputs_embeds, labels = self.reorg_ids(input_ids, labels, audio_offsets,
+                                               audio_features,
+                                               audio_features_lengths,
+                                               batch_idx, inputs_embeds)
+        out = self.llm(inputs_embeds=inputs_embeds,
                        attention_mask=attention_mask,
                        labels=labels,
                        position_ids=position_ids,
@@ -109,19 +120,19 @@ class TouchTTS(PreTrainedModel):
         audio_features_lengths: Optional[torch.LongTensor] = None,
         batch_idx: Optional[torch.LongTensor] = None,
         text_lengths: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
         eos_token_id=None,
         decode_config=None,
     ):
-        assert input_ids.size(0) == 1
-        input_ids, labels = self.reorg_ids(input_ids, labels, audio_offsets,
-                                           audio_features,
-                                           audio_features_lengths, batch_idx)
         token_length = text_lengths[0].item()
         min_length = token_length * 2
         max_length = token_length * 20
-        # There is no prompt token output if we use `inputs_embeds`
-        # instead of `input_ids`
-        inputs_embeds = self.llm.get_input_embeddings()(input_ids)
+        if inputs_embeds is None:
+            inputs_embeds, labels = self.reorg_ids(input_ids, labels,
+                                                   audio_offsets,
+                                                   audio_features,
+                                                   audio_features_lengths,
+                                                   batch_idx)
         model_outputs = self.llm.generate(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
