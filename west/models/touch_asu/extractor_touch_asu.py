@@ -23,14 +23,38 @@ class ExtractorTouchASU(Extractor):
                         self.model_config.encoder_projector_ds_rate)
 
     def extract(self, item):
+        """
+        1. speech pretraining data (asr):
+        messages = [
+            {'role': 'user', 'content': [{
+                'type': 'text', 'text': 'Transcribe the Speech'}]},
+            {'role': 'assistant', 'content': item['txt']},
+        ]
+        2. QA: SFT data (multi-turn)
+        messages = [
+            {'role': 'system', 'content': 'You are a helpful assistant.'},  # optional # noqa
+            {'role': 'user', 'content': 'What is the capital of China?'},   # optional # noqa
+            {'role': 'assistant', 'content': 'The capital of China is Beijing.'},   # optional # noqa
+            {'role': 'user', 'content': {'type': 'audio', 'audio': item['wav']}},  # last turn (for audio qa) # noqa
+            or
+            {'role': 'user', 'content': 'question text'},  # last turn (for text qa) # noqa
+            {'role': 'assistant', 'content': item['txt']},
+        ]
+        """
         IGNORE_TOKEN_ID = LabelSmoother.ignore_index
-        if 'messages' in item:  # OpenAI role-content based SFT data
+        # OpenAI role-content based SFT data
+        # At least one pair of "user" and "assistant"
+        if 'messages' in item:
+            if not isinstance(item['messages'], list) \
+               or len(item['messages']) < 2 \
+               or item['messages'][-2]['role'] != 'user' \
+               or item['messages'][-1]['role'] != 'assistant':
+                return None
             messages = item['messages']
         else:  # Speech pretraining data
             messages = [
                 {
-                    'role':
-                    'user',
+                    'role': 'user',
                     'content': [{
                         'type': 'text',
                         'text': 'Transcribe the Speech'
@@ -45,14 +69,16 @@ class ExtractorTouchASU(Extractor):
                 },
             ]
 
-        t0 = '<|im_start|>user\n'
+        t0 = ''
         t1 = '<|im_end|>\n' + '<|im_start|>assistant\n'
         t2 = ''
         has_audio = True
-        for msg in messages:
-            if msg['role'] == 'system':
-                t0 += msg['content']
-            elif msg['role'] == 'user':
+        for msg in messages[:-2]:
+            t0 += '<|im_start|>' + msg['role'] + '\n' \
+                  + msg['content'] + '<|im_end|>\n'
+        for msg in messages[-2:]:
+            if msg['role'] == 'user':
+                t0 += '<|im_start|>user\n'
                 if isinstance(msg['content'], dict):
                     assert msg['content']['type'] == 'audio'
                     audio = msg['content']['audio']
