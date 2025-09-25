@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import random
+import sys
 from dataclasses import dataclass, field
 from typing import Dict
 
@@ -28,14 +29,6 @@ class DataArguments:
             "help":
             "size for sequence pack, it will override any value"
             "given in batch_size"
-        })
-    num_data_cycles: int = field(
-        default=1,
-        metadata={
-            "help":
-            "repeating read `num_data_cycles` times to avoid uneven data in "
-            "training, especically for tar(shard) training. Typically you can  "
-            "set it to the training epochs"
         })
 
 
@@ -96,7 +89,8 @@ class SpeechDataset(IterableDataset):
         # Devide by reading workers
         lists = lists[worker_id::num_workers]
         raw = self.data_path.endswith('.jsonl')
-        for i in range(self.data_args.num_data_cycles):
+        num_data_cycles = 1 if self.inference else sys.maxsize
+        for i in range(num_data_cycles):
             logging.info(f'Data start iter epoch {i} rank {rank} '
                          f'worker {worker_id} data_size {len(lists)}')
             for line in lists:
