@@ -28,7 +28,6 @@ if [ $stage == "train" ] || [ $stage == "all" ]; then
         --pack_size 20000 \
         --bf16 True \
         --max_steps $steps \
-        --num_data_cycles 1000 \
         --per_device_train_batch_size 1 \
         --per_device_eval_batch_size 1 \
         --gradient_accumulation_steps 1 \
