@@ -1,8 +1,10 @@
 # WEST
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-brightgreen.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Docs](https://img.shields.io/badge/docs-latest-brightgreen.svg)](docs/)
+[![Docs](https://img.shields.io/badge/Docs-latest-brightgreen.svg)](docs/)
+[![Paper](https://img.shields.io/badge/Paper-arXiv-f9f107.svg)](https://arxiv.org/abs/2509.19902)
 [![WeChat](https://img.shields.io/badge/WeChat-07C160?style=flat&logo=wechat&logoColor=white)](#discussion--communication)
+
 
 **We** **S**peech **T**ookit, LLM based Speech Toolkit for Speech Understanding,
 Generation, and Interaction.
@@ -40,8 +42,18 @@ pip install -r requirements.txt
 
 ## Citation
 
-```
+Our paper is available on [arXiv](https://arxiv.org/abs/2509.19902), and you can cite it as:
 
+```
+@misc{zhang2025westllmbasedspeech,
+      title={WEST: LLM based Speech Toolkit for Speech Understanding, Generation, and Interaction},
+      author={Binbin Zhang and Chengdong Liang and Shuai Wang and Xuelong Geng and Zhao Guo and Haoyu Li and Hao Yin and Xipeng Yang and Pengshen Zhang and Changwei Ma and Lei Xie},
+      year={2025},
+      eprint={2509.19902},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2509.19902},
+}
 ```
 
 ## Discussion & Communication
