@@ -3,6 +3,7 @@
 from transformers import AutoConfig, AutoModel
 
 from west.models.fireredasr_llm import FireredASRLLM, FireredASRLLMConfig
+from west.models.kimi_audio import KimiAudio, KimiAudioConfig
 from west.models.osum_echat import OSUMEChat, OSUMEChatConfig
 from west.models.touch_asu import TouchASU, TouchASUConfig
 from west.models.touch_chat import TouchChat, TouchChatConfig
@@ -20,5 +21,7 @@ AutoModel.register(TouchTTSConfig, TouchTTS)
 
 AutoConfig.register("osum_echat", OSUMEChatConfig)
 AutoModel.register(OSUMEChatConfig, OSUMEChat)
+AutoConfig.register("kimi_audio", KimiAudioConfig)
+AutoModel.register(KimiAudioConfig, KimiAudio)
 AutoConfig.register("fireredasr_llm", FireredASRLLMConfig)
 AutoModel.register(FireredASRLLMConfig, FireredASRLLM)
