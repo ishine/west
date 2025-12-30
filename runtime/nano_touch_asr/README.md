@@ -30,3 +30,13 @@ dir=touch_asr_models
 
 
 ## Performance benchmark
+
+Benchmark models:
+* LLM: Qwen2.5-0.5B-Instruct, quantize method: 4bits k-quant
+* encoder+ctc+projector: 30M conformer, 8bits dynamic quant
+
+| Device   | Chip | Quantize | RTF       | chunk(320ms) compute latency(ms) | LLM compute latency(ms) |
+|----------|------|----------|-----------|----------------------------------|-------------------------|
+| Mac Mini | M4   | N        | 0.0589635 | 7.70896                          | 160.12                  |
+| Mac Mini | M4   | Y        | 0.057156  | 10.0387                          | 117.39                  |
+|          |      |          |           |                                  |                         |
