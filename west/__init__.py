@@ -11,6 +11,8 @@ from west.models.touch_chat import TouchChat, TouchChatConfig
 from west.models.touch_flow import TouchFlow, TouchFlowConfig
 from west.models.touch_tts import TouchTTS, TouchTTSConfig
 
+# from west.models.goat_slm import GOATSLMModel, GOATSLMConfig
+
 AutoConfig.register("touch_asu", TouchASUConfig)
 AutoModel.register(TouchASUConfig, TouchASU)
 AutoConfig.register("touch_chat", TouchChatConfig)
@@ -28,3 +30,6 @@ AutoConfig.register("fireredasr_llm", FireredASRLLMConfig)
 AutoModel.register(FireredASRLLMConfig, FireredASRLLM)
 AutoConfig.register("fun_asr", FunASRConfig)
 AutoModel.register(FunASRConfig, FunASR)
+
+# AutoConfig.register("goat_slm", GOATSLMConfig)
+# AutoModel.register(GOATSLMConfig, GOATSLMModel)
