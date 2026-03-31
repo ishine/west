@@ -6,7 +6,7 @@ import logging
 import random
 import sys
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, Optional
 
 import torch
 import torch.distributed as dist
@@ -22,6 +22,12 @@ from west.dataset.extractor import Extractor
 class DataArguments:
     data_path: str = field(default=None,
                            metadata={"help": "Path to the training data."})
+    spk_prompt_wav_map_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help":
+            "TouchFlow SFT: JSON mapping spk_id -> prompt wav for mel_speaker."
+        })
     batch_size: int = field(default=1, metadata={"help": "batch size"})
     pack_size: int = field(
         default=0,
@@ -105,11 +111,11 @@ class SpeechDataset(IterableDataset):
                                 x['txt'] = x['txt'].decode('utf8')
                                 x['wav'] = io.BytesIO(x['wav'])
                                 yield x
-                            except Exception:
-                                logging.info(f'Dataset decode error, {line}')
+                            except Exception as e:
+                                logging.info(f'Dataset decode error, {line}, {e}')
                                 continue
-                    except Exception:
-                        logging.info(f'Dataset parsing error, {line}')
+                    except Exception as e:
+                        logging.info(f'Dataset parsing error, {line}, {e}')
                         continue
 
     def _pack_sequence(self, seqs):
@@ -164,6 +170,8 @@ class SpeechDataset(IterableDataset):
             fields_static = self.extractor.fields_batch_static - \
                 self.extractor.fields_pack_offset
         for k in fields_dynamic:
+            if not all(k in s for s in seqs):
+                continue
             if k == 'input_ids':
                 padding_value = self.tokenizer.pad_token_id
             elif k == 'labels':
@@ -180,6 +188,8 @@ class SpeechDataset(IterableDataset):
                 ret['attention_mask'] = ret['input_ids'].ne(
                     self.tokenizer.pad_token_id)
         for k in fields_static:
+            if not all(k in s for s in seqs):
+                continue
             ret[k] = torch.tensor([s[k] for s in seqs], dtype=torch.int)
         if not pack:
             ret['batch_idx'] = torch.tensor(list(range(len(seqs))),
